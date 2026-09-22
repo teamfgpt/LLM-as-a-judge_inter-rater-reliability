@@ -1,0 +1,9 @@
+.venv*/
+checkpoints/
+__pycache__/
+*.zip
+unsloth_compiled_cache/
+*.out
+logs/
+traces/
+optuna_db/
