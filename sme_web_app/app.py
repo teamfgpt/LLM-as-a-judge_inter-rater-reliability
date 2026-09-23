@@ -95,9 +95,28 @@ def main():
     st.markdown("Evaluasi kualitas rekomendasi kursus terhadap kompetensi (Skala 0-2).")
     
     with st.form("rating_form"):
-        options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
+                options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
         
-        rating_rel = st.radio("Tingkat relevansi (Relevance):", options=options, index=1)
+        rating_rel = st.radio(
+            "Tingkat relevansi (Relevance):", options=options, index=1,
+            help="Sejauh mana materi inti kursus relevan dengan kompetensi dan tanggung jawab pada profil pekerjaan target."
+        )
+        rating_lev = st.radio(
+            "Kesesuaian level jabatan (Level Fit):", options=options, index=1,
+            help="Kesesuaian tingkat kesulitan kursus (mis. Dasar/Menengah/Mahir) dengan tingkatan atau senioritas jabatan."
+        )
+        rating_lan = st.radio(
+            "Kesesuaian bahasa (Language Fit):", options=options, index=1,
+            help="Kesesuaian bahasa pengantar kursus dengan konteks geografi atau tuntutan bahasa pada pekerjaan tersebut."
+        )
+        rating_bus = st.radio(
+            "Kesesuaian konteks bisnis (Business Fit):", options=options, index=1,
+            help="Seberapa cocok studi kasus atau pendekatan kursus dengan fungsi spesifik, industri, atau budaya departemen target."
+        )
+        rating_act = st.radio(
+            "Tingkat kemudahan aplikasi (Actionable):", options=options, index=1,
+            help="Seberapa praktis/aplikatif materi tersebut untuk langsung dipraktikkan dalam pekerjaan sehari-hari (bukan sekadar teori konseptual)."
+        )
         rating_lev = st.radio("Kesesuaian level jabatan (Level Fit):", options=options, index=1)
         rating_lan = st.radio("Kesesuaian bahasa (Language Fit):", options=options, index=1)
         rating_bus = st.radio("Kesesuaian konteks bisnis (Business Fit):", options=options, index=1)
