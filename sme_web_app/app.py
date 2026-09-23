@@ -95,7 +95,7 @@ def main():
     st.markdown("Evaluasi kualitas rekomendasi kursus terhadap kompetensi (Skala 0-2).")
     
     with st.form("rating_form"):
-                options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
+        options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
         
         rating_rel = st.radio(
             "Tingkat relevansi (Relevance):", options=options, index=1,
@@ -117,10 +117,6 @@ def main():
             "Tingkat kemudahan aplikasi (Actionable):", options=options, index=1,
             help="Seberapa praktis/aplikatif materi tersebut untuk langsung dipraktikkan dalam pekerjaan sehari-hari (bukan sekadar teori konseptual)."
         )
-        rating_lev = st.radio("Kesesuaian level jabatan (Level Fit):", options=options, index=1)
-        rating_lan = st.radio("Kesesuaian bahasa (Language Fit):", options=options, index=1)
-        rating_bus = st.radio("Kesesuaian konteks bisnis (Business Fit):", options=options, index=1)
-        rating_act = st.radio("Tingkat kemudahan aplikasi (Actionable):", options=options, index=1)
         
         notes = st.text_area("Catatan opsional:")
         
@@ -128,14 +124,14 @@ def main():
         
         if submitted:
             new_row = {
-                'review_id': row['review_id'],
-                'rater': rater_name,
-                'relevance_rating': int(rating_rel.split(" ")[0]),
-                'level_fit_rating': int(rating_lev.split(" ")[0]),
-                'language_fit_rating': int(rating_lan.split(" ")[0]),
-                'business_fit_rating': int(rating_bus.split(" ")[0]),
-                'actionable_rating': int(rating_act.split(" ")[0]),
-                'feedback_notes': notes
+                "review_id": row["review_id"],
+                "rater": rater_name,
+                "relevance_rating": int(rating_rel.split(" ")[0]),
+                "level_fit_rating": int(rating_lev.split(" ")[0]),
+                "language_fit_rating": int(rating_lan.split(" ")[0]),
+                "business_fit_rating": int(rating_bus.split(" ")[0]),
+                "actionable_rating": int(rating_act.split(" ")[0]),
+                "feedback_notes": notes
             }
             
             st.session_state.results = pd.concat([st.session_state.results, pd.DataFrame([new_row])], ignore_index=True)
