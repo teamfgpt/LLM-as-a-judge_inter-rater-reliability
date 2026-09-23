@@ -6,8 +6,10 @@ import base64
 st.set_page_config(page_title="SME Rater - Active Learning", layout="wide")
 
 # Configuration
-DATA_FILE = "data.xlsx"
-SAVE_FILE = "sme_ratings_progress.csv"
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(BASE_DIR, "data.xlsx")
+SAVE_FILE = os.path.join(BASE_DIR, "sme_ratings_progress.csv")
 
 @st.cache_data
 def load_data():
