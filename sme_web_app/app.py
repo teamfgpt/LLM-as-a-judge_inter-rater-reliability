@@ -12,7 +12,7 @@ SAVE_FILE = os.path.join(BASE_DIR, "sme_ratings_progress.csv")
 @st.cache_data
 def load_data():
     df = pd.read_excel(DATA_FILE)
-    for col in ['relevance_label', 'review_notes']:
+    for col in ['relevance_label', 'level_fit', 'language_fit', 'business_fit', 'actionable', 'review_notes']:
         if col not in df.columns:
             df[col] = ""
     return df
@@ -30,10 +30,17 @@ def main():
     
     if 'results' not in st.session_state:
         if os.path.exists(SAVE_FILE):
-            st.session_state.results = pd.read_csv(SAVE_FILE)
+            existing_df = pd.read_csv(SAVE_FILE)
+            # Ensure new columns exist for legacy CSV compatibility
+            for new_col in ['level_fit_rating', 'language_fit_rating', 'business_fit_rating', 'actionable_rating']:
+                if new_col not in existing_df.columns:
+                    existing_df[new_col] = None
+            st.session_state.results = existing_df
         else:
             st.session_state.results = pd.DataFrame(columns=[
-                'review_id', 'rater', 'relevance_rating', 'feedback_notes'
+                'review_id', 'rater', 
+                'relevance_rating', 'level_fit_rating', 'language_fit_rating', 
+                'business_fit_rating', 'actionable_rating', 'feedback_notes'
             ])
             
     rated_ids = st.session_state.results[st.session_state.results['rater'] == rater_name]['review_id'].tolist()
@@ -73,35 +80,42 @@ def main():
     st.divider()
     
     st.subheader("Prediksi AI")
-    st.info(f"**AI Relevance Label:** {row.get('relevance_label', 'N/A')}\n\n**AI Rationale:** {row.get('review_notes', '-')}")
+    st.info(
+        f"**Relevance:** {row.get('relevance_label', '-')} | "
+        f"**Level:** {row.get('level_fit', '-')} | "
+        f"**Language:** {row.get('language_fit', '-')} | "
+        f"**Business:** {row.get('business_fit', '-')} | "
+        f"**Actionable:** {row.get('actionable', '-')}\n\n"
+        f"**AI Rationale:** {row.get('review_notes', '-')}"
+    )
     
     st.divider()
     
     st.subheader(f"Evaluasi {rater_name}")
-    st.markdown("Evaluasi tingkat relevansi kursus terhadap kompetensi (Skala 0-2).")
+    st.markdown("Evaluasi kualitas rekomendasi kursus terhadap kompetensi (Skala 0-2).")
     
     with st.form("rating_form"):
-        rating = st.radio(
-            "Tingkat relevansi:",
-            options=[
-                "2 - Agree", 
-                "1 - Partially Agree", 
-                "0 - Disagree"
-            ],
-            index=1
-        )
+        options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
+        
+        rating_rel = st.radio("Tingkat relevansi (Relevance):", options=options, index=1)
+        rating_lev = st.radio("Kesesuaian level jabatan (Level Fit):", options=options, index=1)
+        rating_lan = st.radio("Kesesuaian bahasa (Language Fit):", options=options, index=1)
+        rating_bus = st.radio("Kesesuaian konteks bisnis (Business Fit):", options=options, index=1)
+        rating_act = st.radio("Tingkat kemudahan aplikasi (Actionable):", options=options, index=1)
         
         notes = st.text_area("Catatan opsional:")
         
         submitted = st.form_submit_button("Simpan dan lanjut")
         
         if submitted:
-            rating_val = int(rating.split(" ")[0])
-            
             new_row = {
                 'review_id': row['review_id'],
                 'rater': rater_name,
-                'relevance_rating': rating_val,
+                'relevance_rating': int(rating_rel.split(" ")[0]),
+                'level_fit_rating': int(rating_lev.split(" ")[0]),
+                'language_fit_rating': int(rating_lan.split(" ")[0]),
+                'business_fit_rating': int(rating_bus.split(" ")[0]),
+                'actionable_rating': int(rating_act.split(" ")[0]),
                 'feedback_notes': notes
             }
             
