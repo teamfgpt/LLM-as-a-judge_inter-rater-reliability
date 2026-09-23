@@ -267,3 +267,9 @@ coverage than a property of the task itself.
   - *Cohen, J. (1968). Weighted kappa: Nominal scale agreement provision for scaled disagreement or partial credit.*
   - *Zheng, L., et al. (2023). Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena.*
 - **Next Milestone:** Await the completion of the SME rating via the `sme_web_app`. If the QWK score achieves the baseline (e.g., >0.6), the AI will proceed to Mass Inference (Phase 4) on all 366k+ rows.
+
+### 6. SME Web App Iteration & Finalization (2026-09-23)
+- **Deployment & Path Fix:** Resolved Streamlit Community Cloud deployment issues by removing hardcoded package versions to avoid `zlib` compilation errors on Python 3.14, and updated `app.py` to use `os.path.dirname` absolute paths for `data.xlsx` compatibility across cloud environments.
+- **Comprehensive Metrics Expansion:** Expanded the evaluation form from a single metric (Relevance) to all 5 project metrics (`Relevance`, `Level Fit`, `Language Fit`, `Business Fit`, `Actionable`). All utilize the standardized 0-1-2 scale for QWK compatibility.
+- **Anti-Slop UI & Cognitive Load Reduction:** Rewrote the entire UI to adhere to professional, anti-slop guidelines (no excessive emojis, neutral and academic tone). Integrated the metric rubrics/definitions directly into `?` tooltips to maintain a clean interface while ensuring SME rater alignment.
+- **Stateful Navigation & Editing:** Replaced the linear logic with a robust state-management system allowing raters to use "Next/Previous" buttons, jump between cases, and dynamically pre-fill/edit previously submitted ratings without creating data duplicates.
