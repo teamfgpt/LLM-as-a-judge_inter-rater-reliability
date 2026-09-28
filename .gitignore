@@ -7,3 +7,4 @@ unsloth_compiled_cache/
 logs/
 traces/
 optuna_db/
+sme_web_app/.streamlit/secrets.toml

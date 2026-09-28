@@ -1,117 +1,188 @@
-import streamlit as st
-import pandas as pd
+"""SME labelling portal with durable Google Sheets event storage.
+
+Each submitted rating is appended to the configured Google Sheet. The newest
+event for a (rater, review_id) pair is authoritative, so a rater can edit a
+previous response without deleting the audit record.
+"""
+
+from datetime import datetime, timezone
 import os
-import base64
+import uuid
+
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+import streamlit as st
+
 
 st.set_page_config(page_title="SME Rater - Active Learning", layout="wide")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "data.xlsx")
-SAVE_FILE = os.path.join(BASE_DIR, "sme_ratings_progress.csv")
+RATINGS_SHEET_NAME = "Ratings"
+RATING_COLUMNS = [
+    "event_id", "rater", "review_id", "relevance_rating", "level_fit_rating",
+    "language_fit_rating", "business_fit_rating", "actionable_rating",
+    "feedback_notes", "submitted_at",
+]
+RATING_FIELDS = [
+    "relevance_rating", "level_fit_rating", "language_fit_rating",
+    "business_fit_rating", "actionable_rating",
+]
+
 
 @st.cache_data
 def load_data():
     df = pd.read_excel(DATA_FILE)
-    for col in ['relevance_label', 'level_fit', 'language_fit', 'business_fit', 'actionable', 'review_notes']:
-        if col not in df.columns:
-            df[col] = ""
+    for column in [
+        "relevance_label", "level_fit", "language_fit", "business_fit",
+        "actionable", "review_notes",
+    ]:
+        if column not in df.columns:
+            df[column] = ""
     return df
 
-def save_data(results_df):
-    results_df.to_csv(SAVE_FILE, index=False)
 
-def get_index_from_val(val):
-    if pd.isna(val): return 1
-    val = int(val)
-    if val == 2: return 0
-    if val == 1: return 1
-    if val == 0: return 2
-    return 1
+def configured_spreadsheet_id():
+    """Read the Sheet ID from deployment secrets, never source control."""
+    return st.secrets.get("GOOGLE_SHEETS_SPREADSHEET_ID") or os.getenv(
+        "GOOGLE_SHEETS_SPREADSHEET_ID"
+    )
+
+
+@st.cache_resource
+def ratings_worksheet(spreadsheet_id):
+    """Connect using the Streamlit-hosted Google service-account secret."""
+    service_account = dict(st.secrets["gcp_service_account"])
+    credentials = Credentials.from_service_account_info(
+        service_account,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    )
+    client = gspread.authorize(credentials)
+    return client.open_by_key(spreadsheet_id).worksheet(RATINGS_SHEET_NAME)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def load_rating_events(spreadsheet_id):
+    """Return the append-only rating event log from Google Sheets."""
+    records = ratings_worksheet(spreadsheet_id).get_all_records(
+        expected_headers=RATING_COLUMNS
+    )
+    return pd.DataFrame(records, columns=RATING_COLUMNS)
+
+
+def latest_ratings(events):
+    """Keep only the latest submitted response for every rater and case."""
+    if events.empty:
+        return events.copy()
+    latest = events.copy()
+    latest["submitted_at"] = pd.to_datetime(latest["submitted_at"], utc=True)
+    return latest.sort_values("submitted_at").drop_duplicates(
+        subset=["rater", "review_id"], keep="last"
+    )
+
+
+def rating_index(value):
+    """Map a saved ordinal value to its displayed option index."""
+    try:
+        return {2: 0, 1: 1, 0: 2}[int(value)]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def append_rating(spreadsheet_id, rater, review_id, ratings, notes):
+    """Append rather than overwrite, preserving a complete correction history."""
+    event = [
+        str(uuid.uuid4()), rater, str(review_id),
+        *(ratings[field] for field in RATING_FIELDS), notes,
+        datetime.now(timezone.utc).isoformat(),
+    ]
+    ratings_worksheet(spreadsheet_id).append_row(event, value_input_option="RAW")
+    load_rating_events.clear()
+
 
 def main():
     st.title("SME Evaluation Portal")
-    st.markdown("Platform penilaian tingkat kesesuaian (Inter-Rater Reliability / QWK) untuk Phase 2 Active Learning.")
-    
-    df = load_data()
-    
-    # Load state
-    if 'results' not in st.session_state:
-        if os.path.exists(SAVE_FILE):
-            existing_df = pd.read_csv(SAVE_FILE)
-            for new_col in ['level_fit_rating', 'language_fit_rating', 'business_fit_rating', 'actionable_rating']:
-                if new_col not in existing_df.columns:
-                    existing_df[new_col] = None
-            st.session_state.results = existing_df
-        else:
-            st.session_state.results = pd.DataFrame(columns=[
-                'review_id', 'rater', 'relevance_rating', 'level_fit_rating', 
-                'language_fit_rating', 'business_fit_rating', 'actionable_rating', 'feedback_notes'
-            ])
-            
+    st.markdown(
+        "Platform penilaian tingkat kesesuaian untuk Phase 2 Active Learning. "
+        "Setiap penilaian tersimpan di Google Sheets setelah tombol "
+        "**Simpan Penilaian** dipilih."
+    )
+
+    spreadsheet_id = configured_spreadsheet_id()
+    if not spreadsheet_id or "gcp_service_account" not in st.secrets:
+        st.error(
+            "Penyimpanan Google Sheets belum dikonfigurasi. Hubungi administrator "
+            "sebelum melakukan penilaian; aplikasi tidak akan menyimpan data secara lokal."
+        )
+        st.stop()
+
+    try:
+        df = load_data()
+        events = load_rating_events(spreadsheet_id)
+    except Exception as error:
+        st.error(f"Google Sheets tidak dapat diakses. Tidak ada penilaian yang disimpan. ({error})")
+        st.stop()
+
+    results = latest_ratings(events)
     rater_name = st.sidebar.selectbox("Pilih rater", ["Rater 1", "Rater 2"])
-    
-    # Reset tracking index if rater changes
-    if 'last_rater' not in st.session_state or st.session_state.last_rater != rater_name:
+    rated_ids = set(
+        results.loc[results["rater"] == rater_name, "review_id"].astype(str).tolist()
+    )
+    unrated = df[~df["review_id"].astype(str).isin(rated_ids)]
+
+    if "last_rater" not in st.session_state or st.session_state.last_rater != rater_name:
         st.session_state.last_rater = rater_name
-        rated_ids = st.session_state.results[st.session_state.results['rater'] == rater_name]['review_id'].tolist()
-        unrated = df[~df['review_id'].isin(rated_ids)]
-        if len(unrated) > 0:
-            st.session_state.current_idx = int(unrated.index[0])
-        else:
-            st.session_state.current_idx = 0
-            
-    # Calculate progress
-    rated_ids = st.session_state.results[st.session_state.results['rater'] == rater_name]['review_id'].tolist()
-    progress_val = len(rated_ids) / len(df) if len(df) > 0 else 1.0
-    st.sidebar.progress(progress_val)
-    st.sidebar.write(f"Progres {rater_name}: {len(set(rated_ids))} / {len(df)}")
-    
-    # Download Button
-    csv = st.session_state.results.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="sme_ratings_{rater_name.replace(" ", "_")}.csv">Unduh hasil CSV</a>'
-    st.sidebar.markdown(href, unsafe_allow_html=True)
-    
-    if len(df) == 0:
+        st.session_state.current_idx = int(unrated.index[0]) if not unrated.empty else 0
+
+    progress_value = len(rated_ids) / len(df) if len(df) else 1.0
+    st.sidebar.progress(progress_value)
+    st.sidebar.write(f"Progres {rater_name}: {len(rated_ids)} / {len(df)}")
+    st.sidebar.caption("Progres dimuat dari Google Sheets dan dapat dilanjutkan dari perangkat lain.")
+    own_results = results[results["rater"] == rater_name]
+    st.sidebar.download_button(
+        "Unduh penilaian saya (CSV)",
+        own_results.to_csv(index=False).encode("utf-8"),
+        file_name=f"sme_ratings_{rater_name.replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
+
+    if df.empty:
         st.warning("Data kosong.")
         return
-        
-    # Navigation UI
+
+    current_idx = max(0, min(st.session_state.get("current_idx", 0), len(df) - 1))
+    st.session_state.current_idx = current_idx
     col_prev, col_idx, col_next = st.columns([1, 2, 1])
     with col_prev:
-        if st.button("⬅️ Sebelumnya", use_container_width=True) and st.session_state.current_idx > 0:
+        if st.button("⬅️ Sebelumnya", use_container_width=True) and current_idx > 0:
             st.session_state.current_idx -= 1
             st.rerun()
-            
     with col_idx:
-        st.markdown(f"<h3 style='text-align: center; margin-top: 0;'>Kasus {st.session_state.current_idx + 1} dari {len(df)}</h3>", unsafe_allow_html=True)
-        
+        st.markdown(
+            f"<h3 style='text-align: center; margin-top: 0;'>Kasus {current_idx + 1} dari {len(df)}</h3>",
+            unsafe_allow_html=True,
+        )
     with col_next:
-        if st.button("Selanjutnya ➡️", use_container_width=True) and st.session_state.current_idx < len(df) - 1:
+        if st.button("Selanjutnya ➡️", use_container_width=True) and current_idx < len(df) - 1:
             st.session_state.current_idx += 1
             st.rerun()
 
-    # Current Row Data
-    row = df.loc[st.session_state.current_idx]
-    review_id = row['review_id']
-    
-    # Check existing rating
-    existing_rating = st.session_state.results[
-        (st.session_state.results['rater'] == rater_name) & 
-        (st.session_state.results['review_id'] == review_id)
+    row = df.loc[current_idx]
+    review_id = str(row["review_id"])
+    existing = results[
+        (results["rater"] == rater_name) & (results["review_id"].astype(str) == review_id)
     ]
-    
-    is_rated = not existing_rating.empty
-    if is_rated:
+    existing_rating = existing.iloc[0] if not existing.empty else None
+    if existing_rating is not None:
         st.success("✅ Kasus ini sudah Anda nilai. Anda dapat mengubahnya jika perlu.")
-    
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Konteks Pekerjaan")
         st.write(f"**Job Title:** {row.get('job_title', '-')}")
         st.write(f"**Signal Text:** {row.get('competency_signal_text', '-')}")
         st.write(f"**Responsibility:** {row.get('responsibility_text', '-')}")
-        
     with col2:
         st.subheader("Rekomendasi Kursus")
         st.write(f"**Course Name:** {row.get('course_name', '-')}")
@@ -119,7 +190,6 @@ def main():
         st.write(f"**Source:** {row.get('course_source', '-')}")
 
     st.divider()
-    
     st.subheader("Prediksi AI")
     st.info(
         f"**Relevance:** {row.get('relevance_label', '-')} | "
@@ -129,72 +199,71 @@ def main():
         f"**Actionable:** {row.get('actionable', '-')}\n\n"
         f"**AI Rationale:** {row.get('review_notes', '-')}"
     )
-    
+
     st.divider()
-    
     st.subheader(f"Evaluasi {rater_name}")
     st.markdown("Evaluasi kualitas rekomendasi kursus terhadap kompetensi (Skala 0-2).")
-    
-    # Pre-fill defaults
-    def_rel = get_index_from_val(existing_rating['relevance_rating'].iloc[0]) if is_rated else 1
-    def_lev = get_index_from_val(existing_rating['level_fit_rating'].iloc[0]) if is_rated else 1
-    def_lan = get_index_from_val(existing_rating['language_fit_rating'].iloc[0]) if is_rated else 1
-    def_bus = get_index_from_val(existing_rating['business_fit_rating'].iloc[0]) if is_rated else 1
-    def_act = get_index_from_val(existing_rating['actionable_rating'].iloc[0]) if is_rated else 1
-    def_notes = str(existing_rating['feedback_notes'].iloc[0]) if is_rated and not pd.isna(existing_rating['feedback_notes'].iloc[0]) else ""
-    
+    options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
+    defaults = {
+        field: rating_index(existing_rating[field]) if existing_rating is not None else None
+        for field in RATING_FIELDS
+    }
+    notes_default = (
+        str(existing_rating["feedback_notes"])
+        if existing_rating is not None and pd.notna(existing_rating["feedback_notes"])
+        else ""
+    )
+
     with st.form("rating_form"):
-        options = ["2 - Agree", "1 - Partially Agree", "0 - Disagree"]
-        
         rating_rel = st.radio(
-            "Tingkat relevansi (Relevance):", options=options, index=def_rel,
-            help="Sejauh mana materi inti kursus relevan dengan kompetensi dan tanggung jawab pada profil pekerjaan target."
+            "Tingkat relevansi (Relevance):", options=options,
+            index=defaults["relevance_rating"],
+            help="Sejauh mana materi inti kursus relevan dengan kompetensi dan tanggung jawab pada profil pekerjaan target.",
         )
         rating_lev = st.radio(
-            "Kesesuaian level jabatan (Level Fit):", options=options, index=def_lev,
-            help="Kesesuaian tingkat kesulitan kursus (mis. Dasar/Menengah/Mahir) dengan tingkatan atau senioritas jabatan."
+            "Kesesuaian level jabatan (Level Fit):", options=options,
+            index=defaults["level_fit_rating"],
+            help="Kesesuaian tingkat kesulitan kursus dengan tingkatan atau senioritas jabatan.",
         )
         rating_lan = st.radio(
-            "Kesesuaian bahasa (Language Fit):", options=options, index=def_lan,
-            help="Kesesuaian bahasa pengantar kursus dengan konteks geografi atau tuntutan bahasa pada pekerjaan tersebut."
+            "Kesesuaian bahasa (Language Fit):", options=options,
+            index=defaults["language_fit_rating"],
+            help="Kesesuaian bahasa pengantar kursus dengan konteks geografi atau tuntutan bahasa pada pekerjaan tersebut.",
         )
         rating_bus = st.radio(
-            "Kesesuaian konteks bisnis (Business Fit):", options=options, index=def_bus,
-            help="Seberapa cocok studi kasus atau pendekatan kursus dengan fungsi spesifik, industri, atau budaya departemen target."
+            "Kesesuaian konteks bisnis (Business Fit):", options=options,
+            index=defaults["business_fit_rating"],
+            help="Kecocokan studi kasus atau pendekatan kursus dengan fungsi, industri, atau budaya departemen target.",
         )
         rating_act = st.radio(
-            "Tingkat kemudahan aplikasi (Actionable):", options=options, index=def_act,
-            help="Seberapa praktis/aplikatif materi tersebut untuk langsung dipraktikkan dalam pekerjaan sehari-hari (bukan sekadar teori konseptual)."
+            "Tingkat kemudahan aplikasi (Actionable):", options=options,
+            index=defaults["actionable_rating"],
+            help="Seberapa praktis materi tersebut untuk langsung dipraktikkan dalam pekerjaan sehari-hari.",
         )
-        
-        notes = st.text_area("Catatan opsional:", value=def_notes)
-        
+        notes = st.text_area("Catatan opsional:", value=notes_default)
         submitted = st.form_submit_button("Simpan Penilaian")
-        
+
         if submitted:
-            # Remove old rating to prevent duplicates
-            st.session_state.results = st.session_state.results[
-                ~((st.session_state.results['rater'] == rater_name) & (st.session_state.results['review_id'] == review_id))
-            ]
-            
-            new_row = {
-                'review_id': review_id,
-                'rater': rater_name,
-                'relevance_rating': int(rating_rel.split(" ")[0]),
-                'level_fit_rating': int(rating_lev.split(" ")[0]),
-                'language_fit_rating': int(rating_lan.split(" ")[0]),
-                'business_fit_rating': int(rating_bus.split(" ")[0]),
-                'actionable_rating': int(rating_act.split(" ")[0]),
-                'feedback_notes': notes
+            choices = [rating_rel, rating_lev, rating_lan, rating_bus, rating_act]
+            if any(choice is None for choice in choices):
+                st.error("Pilih nilai untuk semua lima kriteria sebelum menyimpan.")
+                st.stop()
+            ratings = {
+                "relevance_rating": int(rating_rel.split(" ", maxsplit=1)[0]),
+                "level_fit_rating": int(rating_lev.split(" ", maxsplit=1)[0]),
+                "language_fit_rating": int(rating_lan.split(" ", maxsplit=1)[0]),
+                "business_fit_rating": int(rating_bus.split(" ", maxsplit=1)[0]),
+                "actionable_rating": int(rating_act.split(" ", maxsplit=1)[0]),
             }
-            
-            st.session_state.results = pd.concat([st.session_state.results, pd.DataFrame([new_row])], ignore_index=True)
-            save_data(st.session_state.results)
-            
-            # Auto advance
-            if st.session_state.current_idx < len(df) - 1:
+            try:
+                append_rating(spreadsheet_id, rater_name, review_id, ratings, notes)
+            except Exception as error:
+                st.error(f"Penilaian gagal disimpan. Silakan coba lagi. ({error})")
+                st.stop()
+            if current_idx < len(df) - 1:
                 st.session_state.current_idx += 1
             st.rerun()
+
 
 if __name__ == "__main__":
     main()
